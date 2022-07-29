@@ -3,11 +3,19 @@ from logzero import logger as log
 from pytimeparse.timeparse import timeparse
 import vsc
 from distutils.dir_util import create_tree
+from requests.adapters import HTTPAdapter, Retry
 
+retries = Retry(
+    total=10,
+    backoff_factor=1,
+    status_forcelist=[413, 429, 500, 501, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE"]
+)
 
 class VSCUpdateDefinition(object):
 
     session = requests.session()
+    session.mount('https://', HTTPAdapter(max_retries=retries))
 
     def __init__(self, platform=None, architecture=None, buildtype=None, quality=None,
             updateurl=None, name=None, version=None, productVersion=None, 
@@ -132,6 +140,7 @@ class VSCUpdateDefinition(object):
 class VSCExtensionDefinition(object):
     
     session = requests.session()
+    session.mount('https://', HTTPAdapter(max_retries=retries))
 
     def __init__(self, identity, raw=None):
         self.identity = identity
@@ -256,6 +265,7 @@ class VSCUpdates(object):
 class VSCMarketplace(object):
    
     session = requests.session()
+    session.mount('https://', HTTPAdapter(max_retries=retries))
 
     def __init__(self, insider):
         self.insider = insider
@@ -376,19 +386,14 @@ class VSCMarketplace(object):
             pageNumber = pageNumber + 1
             query = self._query(filtertype, filtervalue, pageNumber, pageSize)
             result = None
-            for i in range(10):
-                if i > 0:
-                    log.info("Retrying pull page %d attempt %d." % (pageNumber, i+1))
-                try:
-                    result = self.session.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)
-                    if result:
-                        break
-                except requests.exceptions.ProxyError:
-                    log.info("ProxyError: Retrying.")
-                except requests.exceptions.ReadTimeout:
-                    log.info("ReadTimeout: Retrying.")
+            try:
+                result = self.session.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)
+            except requests.exceptions.ProxyError:
+                log.info("ProxyError: Retrying.")
+            except requests.exceptions.ReadTimeout:
+                log.info("ReadTimeout: Retrying.")
             if not result:
-                log.info("Failed 10 attempts to query marketplace. Giving up.")
+                log.info("All retry attempts to query marketplace failed. Giving up.")
                 break
             jresult = result.json()
             count = count + pageSize
