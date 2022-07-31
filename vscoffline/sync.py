@@ -142,7 +142,18 @@ class VSCExtensionDefinition(object):
             self.__dict__.update(raw)            
             if 'extensionId' in raw:
                 self.extensionId = raw['extensionId']
+        # take the first stable version
+        stable_versions = [v for v in self.versions if not self.is_prerelease(v)]
+        if len(stable_versions):
+            self.versions = stable_versions[:1]
 
+    def is_prerelease(self, version):
+        if "properties" in version:
+            for prop in version["properties"]:
+                if prop["key"] == "Microsoft.VisualStudio.Code.PreRelease" and prop["value"] == "true":
+                    return True
+        return False
+    
     def download_assets(self, destination):
         availableassets = self._get_asset_types()
         for availableasset in availableassets:
@@ -444,9 +455,8 @@ class VSCMarketplace(object):
         }
 
     def _query_flags(self):
-        #return QueryFlags(914)
         return vsc.QueryFlags.IncludeFiles | vsc.QueryFlags.IncludeVersionProperties | vsc.QueryFlags.IncludeAssetUri | \
-            vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.IncludeLatestVersionOnly
+            vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.ExcludeNonValidated
 
     def _headers(self, version='1.34.0'):
         if self.insider:
