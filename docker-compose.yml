@@ -10,10 +10,10 @@ services:
       - 1.1.1.1
     volumes:
       # Enable for dev
-      #- ./vscoffline/:/opt/vscoffline/:ro
+      - ./vscoffline/:/opt/vscoffline/:ro
       - ./artifacts/:/artifacts/
     environment:
-      - SYNCARGS=--sync
+      - SYNCARGS=--sync --skip-binaries
       # Enable to sync all extensions
       #- SYNCARGS=--syncall
       # Enable a logfile

@@ -143,10 +143,11 @@ class VSCExtensionDefinition(object):
             if 'extensionId' in raw:
                 self.extensionId = raw['extensionId']
 
-    def download_assets(self, destination):
+    def download_vsix(self, destination):
         availableassets = self._get_asset_types()
         for availableasset in availableassets:
-            self._download_assets(destination, availableasset)        
+            if availableasset == 'Microsoft.VisualStudio.Ide.Payload':
+                self._download_assets(destination, availableasset)        
 
     def process_embedded_extensions(self, destination, mp):
         """
@@ -188,12 +189,11 @@ class VSCExtensionDefinition(object):
             log.warning('download_asset() cannot download update if the update definition has not been downloaded')
             return
         for version in self.versions:
-            ver_destination = os.path.join(destination, self.identity, version["version"])
             url = self._get_asset_source(asset, version["version"])
             if not url:
                 log.warning('download_asset() cannot download update as asset url is missing')
                 return
-            destfile = os.path.join(ver_destination, f'{asset}')
+            destfile = os.path.join(destination, f'{self.identity}.vsix')
             create_tree(os.path.abspath(os.sep), (destfile,))
             if not os.path.exists(destfile):
                 log.debug(f'Downloading {self.identity} {asset} to {destfile}')
@@ -262,7 +262,8 @@ class VSCMarketplace(object):
 
     def get_recommendations(self, destination):
         recommendations = self.search_top_n(config.search_top_n)
-        recommended_old = self.get_recommendations_old(destination)
+        recommended_old = {}
+        # recommended_old = self.get_recommendations_old(destination)
 
         for extension in recommendations:
             # If the extension has already been found then prevent it from being collected again when processing the old recommendation list
@@ -372,6 +373,8 @@ class VSCMarketplace(object):
         extensions = {}
         total = 0
         count = 0
+        if limit < pageSize:
+            pageSize = limit
         while count <= total:
             #log.debug(f'Query marketplace count {count} / total {total} - pagenumber {pageNumber}, pagesize {pageSize}')
             pageNumber = pageNumber + 1
@@ -381,7 +384,7 @@ class VSCMarketplace(object):
                 if i > 0:
                     log.info("Retrying pull page %d attempt %d." % (pageNumber, i+1))
                 try:
-                    result = self.session.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)
+                    result = self.session.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)                 
                     if result:
                         break
                 except requests.exceptions.ProxyError:
@@ -404,7 +407,7 @@ class VSCMarketplace(object):
                         for resmd in jres['resultMetadata']:                        
                             if 'ResultCount' in resmd['metadataType']:
                                 total = resmd['metadataItems'][0]['count']
-            if limit > 0 and count > limit:
+            if limit > 0 and count >= limit:
                 break
 
         return list(extensions.values())
@@ -423,7 +426,9 @@ class VSCMarketplace(object):
             'sortBy': vsc.SortBy.NoneOrRelevance,
             'sortOrder': vsc.SortOrder.Default,
             'criteria': [
-                self._query_filter_criteria(vsc.FilterType.Target, 'Microsoft.VisualStudio.Code'),
+                self._query_filter_criteria(vsc.FilterType.Target, 'Microsoft.VisualStudio.Pro'),
+                self._query_filter_criteria(vsc.FilterType.Target, 'Microsoft.VisualStudio.Community'),
+                self._query_filter_criteria(vsc.FilterType.Target, 'Microsoft.VisualStudio.IntegratedShell'),
                 self._query_filter_criteria(vsc.FilterType.ExcludeWithFlags, str(int(vsc.QueryFlags.Unpublished)))                
             ]        
         }
@@ -442,9 +447,8 @@ class VSCMarketplace(object):
         }
 
     def _query_flags(self):
-        #return QueryFlags(914)
         return vsc.QueryFlags.IncludeFiles | vsc.QueryFlags.IncludeVersionProperties | vsc.QueryFlags.IncludeAssetUri | \
-            vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.IncludeLatestVersionOnly
+            vsc.QueryFlags.IncludeStatistics | vsc.QueryFlags.IncludeLatestVersionOnly | vsc.QueryFlags.ExcludeNonValidated
 
     def _headers(self, version='1.34.0'):
         if self.insider:
@@ -452,12 +456,12 @@ class VSCMarketplace(object):
         else:
             insider = ''
         return {
-            'content-type': 'application/json',
-            'accept': 'application/json;api-version=3.0-preview.1',
+            'Cache-Control': 'no-cache',
+            'Content-Type': 'application/json',
+            'Connection': 'keep-alive',
+            'Accept': 'application/json;api-version=3.0-preview.1',
             'accept-encoding': 'gzip, deflate, br',
-            'User-Agent': f'VSCode {version}{insider}',
-            'x-market-client-Id': f'VSCode {version}{insider}',            
-            'x-market-user-Id': str(uuid.uuid4())
+            'User-Agent': f'PostmanRuntime/7.29.2',
         }
 
     def __repr__(self):
@@ -466,7 +470,7 @@ class VSCMarketplace(object):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Synchronises VSCode in an Offline Environment')
+    parser = argparse.ArgumentParser(description='Synchronises VS in an Offline Environment')
     parser.add_argument('--sync', dest='sync', action='store_true', help='The basic-user sync. It includes stable binaries and typical extensions')
     parser.add_argument('--syncall', dest='syncall', action='store_true', help='The power-user sync. It includes all binaries and extensions ')
     parser.add_argument('--artifacts', dest='artifactdir', default='../artifacts/', help='Path to downloaded artifacts')
@@ -527,26 +531,11 @@ if __name__ == '__main__':
         config.frequency = timeparse(config.frequency)
     
     while True:        
-        versions = []
         extensions = {}
         mp = VSCMarketplace(config.checkinsider)
-
-        if config.checkbinaries and not config.skipbinaries:
-            log.info('Syncing VS Code Update Versions')
-            versions = VSCUpdates.latest_versions(config.checkinsider)
-
-        if config.updatebinaries and not config.skipbinaries:
-            log.info('Syncing VS Code Binaries')
-            for idkey in versions:
-                if versions[idkey].updateurl:
-                    result = versions[idkey].download_update(config.artifactdir_installers)
-
-                    # Only save the reference json if the download was successful
-                    if result:
-                        versions[idkey].save_state(config.artifactdir_installers)
         
         if config.checkspecified:
-            log.info('Syncing VS Code Specified Extensions')
+            log.info('Syncing VS Specified Extensions')
             specifiedpath = os.path.join(os.path.abspath(config.artifactdir), 'specified.json')
             specified = mp.get_specified(specifiedpath)
             if specified:
@@ -555,7 +544,7 @@ if __name__ == '__main__':
                     extensions[item.identity] = item
 
         if config.extensionsearch:
-            log.info(f'Searching for VS Code Extension: {config.extensionsearch}')
+            log.info(f'Searching for VS Extension: {config.extensionsearch}')
             results = mp.search_by_text(config.extensionsearch)
             log.info(f'Found {len(results)} extensions')
             for item in results:
@@ -563,21 +552,21 @@ if __name__ == '__main__':
                 extensions[item.identity] = item
 
         if config.extensionname:
-            log.info(f'Checking Specific VS Code Extension: {config.extensionname}')
+            log.info(f'Checking Specific VS Extension: {config.extensionname}')
             result = mp.search_by_extension_name(config.extensionname)
             if result:
                 log.info(result)
                 extensions[result.identity] = result
         
         if config.checkextensions:
-            log.info('Syncing VS Code Recommended Extensions')            
+            log.info('Syncing VS Recommended Extensions')            
             recommended = mp.get_recommendations(os.path.abspath(config.artifactdir))
             for item in recommended:
                 log.debug(item)
                 extensions[item.identity] = item
         
         if config.updatemalicious:
-            log.info('Syncing VS Code Malicious Extension List')
+            log.info('Syncing VS Malicious Extension List')
             malicious = mp.get_malicious(os.path.abspath(config.artifactdir), extensions)
 
         if config.updateextensions:
@@ -587,15 +576,8 @@ if __name__ == '__main__':
             for identity in extensions:
                 if count % 100 == 0:
                     log.info(f'Progress {count}/{len(extensions)} ({count/len(extensions)*100:.1f}%)')
-                extensions[identity].download_assets(config.artifactdir_extensions)
-                bonus = extensions[identity].process_embedded_extensions(config.artifactdir_extensions, mp) + bonus
-                extensions[identity].save_state(config.artifactdir_extensions)
+                extensions[identity].download_vsix(config.artifactdir_extensions)
                 count = count + 1
-
-            for bonusextension in bonus:
-                log.debug(f'Processing Embedded Extension: {bonusextension}')
-                bonusextension.download_assets(config.artifactdir_extensions)                
-                bonusextension.save_state(config.artifactdir_extensions)
                 
         log.info('Complete')
         VSCUpdates.signal_updated(os.path.abspath(config.artifactdir))
