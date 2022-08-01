@@ -394,7 +394,7 @@ class VSCMarketplace(object):
                 if i > 0:
                     log.info("Retrying pull page %d attempt %d." % (pageNumber, i+1))
                 try:
-                    result = self.session.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)
+                    result = requests.post(vsc.URL_MARKETPLACEQUERY, headers=self._headers(), json=query, allow_redirects=True, timeout=vsc.TIMEOUT)
                     if result:
                         break
                 except requests.exceptions.ProxyError:
@@ -417,7 +417,7 @@ class VSCMarketplace(object):
                         for resmd in jres['resultMetadata']:                        
                             if 'ResultCount' in resmd['metadataType']:
                                 total = resmd['metadataItems'][0]['count']
-            if limit > 0 and count > limit:
+            if limit > 0 and count >= limit:
                 break
 
         return list(extensions.values())
